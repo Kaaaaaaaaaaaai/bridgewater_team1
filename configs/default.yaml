@@ -1,0 +1,8 @@
+data:
+  source: data/raw
+model:
+  type: dummy
+strategy:
+  type: simple
+logs:
+  level: INFO

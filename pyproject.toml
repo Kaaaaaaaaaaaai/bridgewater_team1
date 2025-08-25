@@ -1,0 +1,13 @@
+[project]
+name = "bridgewater-team1"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.5",
+    "polars>=1.32.3",
+    "torch>=2.8.0",
+    "yfinance>=0.2.65",
+]
