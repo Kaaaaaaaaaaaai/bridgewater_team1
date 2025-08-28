@@ -127,6 +127,100 @@ def train(
 
     return model, epoch_losses, epoch_mses
 
+def check_reconstructed_signals(model, loader, device, tickers):
+    """Plot original and reconstructed signals for a few examples and save figures.
+
+    This function grabs a single batch from `loader`, finds a PriceHistoryDataset
+    (to access `bin_edges`), runs the model in evaluation mode to produce
+    predicted tokens, maps tokens back to numeric bin centers and plots the
+    original vs reconstructed signals on the same axes. The plot is saved to
+    `fig_dir/reconstructed_signals.png`.
+
+    Args:
+        model: trained AutoEncoder instance
+        loader: DataLoader producing (src, trg) batches where src is (seq_len, batch)
+        device: torch.device where model and tensors should be moved
+
+    Returns: path to the saved figure (Path)
+    """
+    import math
+    from torch.utils.data import ConcatDataset
+
+    model = model.to(device)
+    model.eval()
+
+    # extract underlying dataset to access bin_edges
+    underlying = None
+    try:
+        ds = loader.dataset
+        if isinstance(ds, ConcatDataset):
+            for d in ds.datasets:
+                if hasattr(d, "bin_edges"):
+                    underlying = d
+                    break
+        elif hasattr(ds, "bin_edges"):
+            underlying = ds
+    except Exception:
+        underlying = None
+
+    if underlying is None:
+        raise RuntimeError("Could not find underlying PriceHistoryDataset with bin_edges in loader.dataset")
+
+    bin_edges = np.asarray(underlying.bin_edges)
+    # compute bin centers
+    centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+
+    # grab one batch
+    it = iter(loader)
+    src, trg = next(it)
+    # src: (seq_len, batch)
+    seq_len, batch_size = src.shape
+
+    src = src.to(device)
+
+    # encode once
+    with torch.no_grad():
+        hidden, cell = model.encoder(src)
+
+        reconstructed_tokens = []
+        # teacher-forced reconstruction: feed decoder with src[t]
+        for t in range(seq_len):
+            dec_input = src[t]
+            output, hidden, cell = model.decoder(dec_input, hidden, cell)
+            preds = torch.argmax(output, dim=1)  # (batch,)
+            reconstructed_tokens.append(preds.cpu().numpy())
+
+    reconstructed_tokens = np.stack(reconstructed_tokens, axis=0)  # (seq_len, batch)
+    original_tokens = src.cpu().numpy()  # (seq_len, batch)
+
+    # map tokens to centers (clip to valid range)
+    def tokens_to_values(tok_arr):
+        toks = np.clip(tok_arr, 0, len(centers) - 1)
+        return centers[toks]
+
+    orig_vals = tokens_to_values(original_tokens)
+    recon_vals = tokens_to_values(reconstructed_tokens)
+
+    # prepare figure dir from main's fig_dir if available, else current dir
+    fig_dir = Path(__file__).resolve().parents[1] / "logs"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    out_path = fig_dir / "reconstructed_signals.png"
+
+    # plot a few examples
+    n_examples = min(4, batch_size)
+    plt.figure(figsize=(10, 2.5 * n_examples))
+    for i in range(n_examples):
+        ax = plt.subplot(n_examples, 1, i + 1)
+        ax.plot(range(seq_len), orig_vals[:, i], label="original", linewidth=1.2)
+        ax.plot(range(seq_len), recon_vals[:, i], label="reconstructed", linewidth=1.0, linestyle="--")
+        ax.set_title(f"{tickers[i]}")
+        ax.legend()
+        ax.grid(True)
+
+    plt.tight_layout()
+    plt.savefig(out_path)
+    print(f"Saved reconstructed signals plot to {out_path}")
+    return out_path
 
 def main():
     ensure_paths()
@@ -135,22 +229,30 @@ def main():
     seq_len = 32
     batch_size = 64
     num_bins = 256
-    epochs = 6
+    epochs = 50
 
     print("Building dataloader...")
     loader = build_dataloader(tickers, seq_len=seq_len, batch_size=batch_size, num_bins=num_bins)
     print("Dataloader ready. Starting training...")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, losses, mses = train(loader, input_dim=num_bins, emb_dim=128, hidden_dim=256, n_layers=2, dropout=0.1, epochs=epochs, lr=1e-3, device=device)
+    model, losses, mses = train(loader, input_dim=num_bins, emb_dim=8, hidden_dim=256, n_layers=2, dropout=0.1, epochs=epochs, lr=1e-3, device=device)
 
     # Ensure models dir exists
     models_dir = Path(__file__).resolve().parents[1] / "models"
+    fig_dir = Path(__file__).resolve().parents[1] / "logs"
     models_dir.mkdir(parents=True, exist_ok=True)
+    fig_dir.mkdir(parents=True, exist_ok=True)
 
     model_path = models_dir / "autoencoder.pt"
     torch.save(model.state_dict(), str(model_path))
     print(f"Saved model to {model_path}")
+
+    # produce reconstructed signals plot
+    try:
+        check_reconstructed_signals(model, loader, device, tickers)
+    except Exception as e:
+        print(f"Could not produce reconstructed signals plot: {e}")
 
     # Plot MSE curve
     plt.figure()
@@ -159,7 +261,7 @@ def main():
     plt.xlabel("Epoch")
     plt.ylabel("MSE")
     plt.grid(True)
-    plot_path = models_dir / "mse_training.png"
+    plot_path = fig_dir / "mse_training.png"
     plt.savefig(plot_path)
     print(f"Saved MSE plot to {plot_path}")
 

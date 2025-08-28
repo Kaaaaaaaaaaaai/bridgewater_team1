@@ -57,7 +57,7 @@ class PriceHistoryDataset(Dataset):
         self.pairs: List[Tuple[np.ndarray, np.ndarray]] = []
         for i in range(len(tokens) - self.seq_len):
             src = tokens[i : i + self.seq_len]
-            trg = tokens[i + 1 : i + self.seq_len + 1]
+            trg = tokens[i : i + self.seq_len]
             self.pairs.append((src, trg))
 
     def _download_series(self) -> np.ndarray:
